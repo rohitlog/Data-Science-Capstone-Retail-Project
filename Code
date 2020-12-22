@@ -1,0 +1,331 @@
+#Retail Analysis Project
+#import libraries
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+%matplotlib inline
+import warnings
+from operator import attrgetter
+import matplotlib.colors as mcolors
+
+#Reading the dataset in a dataframe using Pandas
+train=pd.read_excel(r'train.xlsx')
+test=pd.read_excel(r'test.xlsx')
+
+print(train.shape)
+print(test.shape)
+
+#combining train and test data
+df_concat = pd.concat([train, test], axis=0)
+print(df_concat.shape)
+df_concat.isnull().sum()
+df_concat.head()
+
+#remove null value using CustermerID column 
+data= df_concat [pd.notnull(df_concat['CustomerID'])]
+data.shape
+data.isnull().sum()
+
+#Remove duplicate data records.
+filtered_data=data.drop_duplicates()
+filtered_data.shape
+
+#Dulicate Record
+df_concat [df_concat.duplicated()]
+
+#Perform descriptive analytics on data
+def data():
+ #  The sum of all the Quantity
+    print(); print(filtered_data['Quantity'].sum())
+    
+    # Mean UnitPrice
+    print(); print(filtered_data['UnitPrice'].mean())
+
+    # Cumulative sum of UnitPrice, moving from the rows from the top
+    print(); print(filtered_data['UnitPrice'].cumsum())
+
+    # Summary statistics on data
+    print(); print(filtered_data['UnitPrice'].describe())
+
+    # Counting the number of non-NA values
+    print(); print(filtered_data['UnitPrice'].count())
+
+    # Minimum value of UnitPrice
+    print(); print(filtered_data['UnitPrice'].min())
+
+    # Maximum value of UnitPrice
+    print(); print(filtered_data['UnitPrice'].max())
+
+    # Median value of UnitPrice
+    print(); print(filtered_data['UnitPrice'].median())
+
+    # Sample variance of UnitPrice values
+    print(); print(filtered_data['UnitPrice'].var())
+
+    # Sample standard deviation of UnitPrice values
+    print(); print(filtered_data['UnitPrice'].std())
+
+    # Skewness of UnitPrice values
+    print(); print(filtered_data['UnitPrice'].skew())
+
+    # Kurtosis of UnitPrice values
+    print(); print(filtered_data['UnitPrice'].kurt())
+
+    # Correlation Matrix Of Values
+    print(); print(filtered_data.corr())
+
+    # Covariance Matrix Of Values
+    print(); print(filtered_data.cov())
+    
+data()
+
+#calculate the percentage of customers ordered more than once
+n_orders = filtered_data.groupby(['CustomerID'])['InvoiceNo'].nunique()
+mult_orders_perc = np.sum(n_orders > 1) / filtered_data['CustomerID'].nunique()
+print(f'{100 * mult_orders_perc:.2f}% of customers ordered more than once.')
+
+#Distribution of number of orders per customer
+ax = sns.distplot(n_orders, kde=False, hist=True)
+ax.set(title='Distribution of number of orders per customer',
+       xlabel='# of orders', 
+       ylabel='# of customers');
+
+#we create the cohort and order_month variables.
+#The first one indicates the monthly cohort based on the first purchase date (calculated per customer)
+filtered_data['order_month'] = filtered_data['InvoiceDate'].dt.to_period('M')
+filtered_data['cohort'] = filtered_data.groupby('CustomerID')['InvoiceDate'] \
+                 .transform('min') \
+                 .dt.to_period('M')
+
+
+# month cohort with active customer
+df_cohort = filtered_data.groupby(['cohort', 'order_month']) \
+              .agg(n_customers=('CustomerID', 'nunique')) \
+              .reset_index(drop=False)
+df_cohort['period_number'] = (df_cohort.order_month - df_cohort.cohort).apply(attrgetter('n'))
+df_cohort
+
+cohort_pivot = df_cohort.pivot_table(index = 'cohort',
+                                     columns = 'period_number',
+                                     values = 'n_customers')
+cohort_pivot
+
+cohort_size = cohort_pivot.iloc[:,0]
+retention_matrix = cohort_pivot.divide(cohort_size, axis = 0)
+
+#Analyze the retention rate of customers.
+with sns.axes_style("white"):
+    fig, ax = plt.subplots(1, 2, figsize=(12, 8), sharey=True, gridspec_kw={'width_ratios': [1, 11]})
+    
+    # retention matrix
+    sns.heatmap(retention_matrix, 
+                mask=retention_matrix.isnull(), 
+                annot=True, 
+                fmt='.0%', 
+                cmap='RdYlGn', 
+                ax=ax[1])
+    ax[1].set_title('Monthly Cohorts: User Retention', fontsize=16)
+    ax[1].set(xlabel='# of periods',
+              ylabel='')
+
+    # cohort size
+    cohort_size_df = pd.DataFrame(cohort_size).rename(columns={0: 'cohort_size'})
+    white_cmap = mcolors.ListedColormap(['white'])
+    sns.heatmap(cohort_size_df, 
+                annot=True, 
+                cbar=False, 
+                fmt='g', 
+                cmap=white_cmap, 
+                ax=ax[0])
+
+#Build a RFM (Recency Frequency Monetary) model
+print('{:,} rows; {:,} columns'
+      .format(filtered_data.shape[0], filtered_data.shape[1]))
+print('{:,} transactions don\'t have a customer id'
+      .format(filtered_data[filtered_data.CustomerID.isnull()].shape[0]))
+print('Transactions timeframe from {} to {}'.format(filtered_data['InvoiceDate'].min(),
+                                    filtered_data['InvoiceDate'].max()))
+
+# --Group data by customerID--
+# Create TotalSum column for online dataset
+filtered_data['TotalSum'] = filtered_data['Quantity'] * filtered_data['UnitPrice']
+# Create snapshot date
+from datetime import datetime, timedelta 
+snapshot_date = filtered_data['InvoiceDate'].max() + timedelta(days=1)
+print(snapshot_date)
+# Grouping by CustomerID
+data_process = filtered_data.groupby(['CustomerID']).agg({
+        'InvoiceDate': lambda x: (snapshot_date - x.max()).days,
+        'InvoiceNo': 'count',
+        'TotalSum': 'sum'})
+# Rename the columns 
+data_process.rename(columns={'InvoiceDate': 'Recency',
+                         'InvoiceNo': 'Frequency',
+                         'TotalSum': 'MonetaryValue'}, inplace=True)
+
+# Print top 5 rows and shape of dataframe
+print(data_process.head())
+print('{:,} rows; {:,} columns'
+      .format(data_process.shape[0], data_process.shape[1]))
+data_process
+
+# --Calculate R and F groups--
+# Create labels for Recency and Frequency
+r_labels = range(4, 0, -1); f_labels = range(1, 5)
+# Assign these labels to 4 equal percentile groups 
+r_groups = pd.qcut(data_process['Recency'], q=4, labels=r_labels)
+# Assign these labels to 4 equal percentile groups 
+f_groups = pd.qcut(data_process['Frequency'], q=4, labels=f_labels)
+# Create new columns R and F 
+data_process_01 = data_process.assign(R = r_groups.values, F = f_groups.values)
+data_process_01.head()
+
+# Create labels for MonetaryValue
+m_labels = range(1, 5)
+# Assign these labels to three equal percentile groups 
+m_groups = pd.qcut(data_process['MonetaryValue'], q=4, labels=m_labels)
+# Create new column M
+data_process_01 = data_process_01.assign(M = m_groups.values)
+data_process_01.head()
+
+# Concat RFM quartile values to create RFM Segments
+def join_rfm(x): return str(x['R']) + str(x['F']) + str(x['M'])
+data_process_01['RFM_Segment_Concat'] = data_process_01.apply(join_rfm, axis=1)
+rfm = data_process_01
+rfm.head()
+
+# Count num of unique segments
+rfm_count_unique = rfm.groupby('RFM_Segment_Concat')['RFM_Segment_Concat'].nunique()
+print(rfm_count_unique.sum())
+
+# Calculate RFM_Score
+rfm['RFM_Score'] = rfm[['R','F','M']].sum(axis=1)
+print(rfm['RFM_Score'].head())
+
+# Define rfm_level function
+def rfm_level(df):
+    if df['RFM_Score'] >= 9:
+        return 'Can\'t Loose Them'
+    elif ((df['RFM_Score'] >= 8) and (df['RFM_Score'] < 9)):
+        return 'Champions'
+    elif ((df['RFM_Score'] >= 7) and (df['RFM_Score'] < 8)):
+        return 'Loyal'
+    elif ((df['RFM_Score'] >= 6) and (df['RFM_Score'] < 7)):
+        return 'Potential'
+    elif ((df['RFM_Score'] >= 5) and (df['RFM_Score'] < 6)):
+        return 'Promising'
+    elif ((df['RFM_Score'] >= 4) and (df['RFM_Score'] < 5)):
+        return 'Needs Attention'
+    else:
+        return 'Require Activation'
+
+# Create a new variable RFM_Level
+rfm['RFM_Level'] = rfm.apply(rfm_level, axis=1)
+# Print the header with top 5 rows to the console
+rfm.head()
+
+# Calculate average values for each RFM_Level, and return a size of each segment 
+rfm_level_agg = rfm.groupby('RFM_Level').agg({
+    'Recency': 'mean',
+    'Frequency': 'mean',
+    'MonetaryValue': ['mean', 'count']
+}).round(1)
+# Print the aggregated dataset
+print(rfm_level_agg)
+
+##Prepare the data for the algorithm.
+data_process.head()
+data_process.info()
+data_process.describe()
+
+fig,ax = plt.subplots(1, 3, figsize=(15,3))
+sns.distplot(data_process['Recency'], ax=ax[0])
+sns.distplot(data_process['Frequency'], ax=ax[1])
+sns.distplot(data_process['MonetaryValue'], ax=ax[2])
+plt.tight_layout()
+plt.show()
+
+#The data is asymmetrically distributed, managing the skewness with appropriate transformation
+from scipy import stats
+def analyze_skewness(x):
+    fig, ax = plt.subplots(2, 2, figsize=(5,5))
+    sns.distplot(data_process[x], ax=ax[0,0])
+    sns.distplot(np.log(data_process[x]), ax=ax[0,1])
+    sns.distplot(np.sqrt(data_process[x]), ax=ax[1,0])
+    sns.distplot(stats.boxcox(data_process[x])[0], ax=ax[1,1])
+    plt.tight_layout()
+    plt.show()
+    
+    print(data_process[x].skew().round(2))
+    print(np.log(data_process[x]).skew().round(2))
+    print(np.sqrt(data_process[x]).skew().round(2))
+    print(pd.Series(stats.boxcox(data_process[x])[0]).skew().round(2))
+
+analyze_skewness('Recency')
+analyze_skewness('Frequency')
+
+fig, ax = plt.subplots(1, 2, figsize=(10,3))
+sns.distplot(data_process['MonetaryValue'], ax=ax[0])
+sns.distplot(np.cbrt(data_process['MonetaryValue']), ax=ax[1])
+plt.show()
+print(data_process['MonetaryValue'].skew().round(2))
+print(np.cbrt(data_process['MonetaryValue']).skew().round(2))
+
+# Set the Numbers
+customers_fix = pd.DataFrame()
+customers_fix["Recency"] = stats.boxcox(data_process['Recency'])[0]
+customers_fix["Frequency"] = stats.boxcox(data_process['Frequency'])[0]
+customers_fix["MonetaryValue"] = pd.Series(np.cbrt(data_process['MonetaryValue'])).values
+customers_fix.tail()
+
+
+#Standardrize data
+from sklearn.preprocessing import StandardScaler
+scaler = StandardScaler()
+scaler.fit(customers_fix)
+customers_normalized = scaler.transform(customers_fix)
+print(customers_normalized.mean(axis = 0).round(2))
+print(customers_normalized.std(axis = 0).round(2))
+
+pd.DataFrame(customers_normalized).head()
+
+#Decide the optimum number of clusters to be formed.
+from sklearn.cluster import KMeans
+
+sse = {}
+for k in range(1, 11):
+    kmeans = KMeans(n_clusters=k, random_state=42)
+    kmeans.fit(customers_normalized)
+    sse[k] = kmeans.inertia_ # SSE to closest cluster centroid
+
+plt.title('The Elbow Method')
+plt.xlabel('k')
+plt.ylabel('SSE')
+sns.pointplot(x=list(sse.keys()), y=list(sse.values()))
+plt.show()
+
+#Create clusters using k-means clustering algorithm.
+model = KMeans(n_clusters=3, random_state=42)
+model.fit(customers_normalized)
+model.labels_.shape
+data_process.shape
+
+data_process["Cluster"] = model.labels_
+data_process.head()
+
+df_normalized = pd.DataFrame(customers_normalized, columns=['Recency', 'Frequency', 'MonetaryValue'])
+df_normalized['ID'] = data_process.index
+df_normalized['Cluster'] = model.labels_
+df_normalized.head()
+
+# Melt The Data
+df_nor_melt = pd.melt(df_normalized.reset_index(),
+                      id_vars=['ID', 'Cluster'],
+                      value_vars=['Recency','Frequency','MonetaryValue'],
+                      var_name='Attribute',
+                      value_name='Value')
+df_nor_melt.head()
+
+#Analyze these clusters and comment on the results.
+sns.lineplot('Attribute', 'Value', hue='Cluster', data=df_nor_melt)
